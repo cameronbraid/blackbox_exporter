@@ -28,6 +28,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/config"
 	"github.com/prometheus/common/log"
+
+	opentracing "github.com/opentracing/opentracing-go"
 )
 
 func matchRegularExpressions(reader io.Reader, httpConfig HTTPProbe) bool {
@@ -121,8 +123,14 @@ func probeHTTP(ctx context.Context, target string, module Module, registry *prom
 		targetHost = targetURL.Host
 	}
 
+	span, ctx := opentracing.StartSpanFromContext(ctx, "http_probe")
+	defer span.Finish()
+
+	span.SetTag("http.url", target)
+
 	ip, err := chooseProtocol(module.HTTP.PreferredIPProtocol, targetHost, registry)
 	if err != nil {
+		span.SetTag("blackbox_exporter.success", false)
 		return false
 	}
 
@@ -145,6 +153,7 @@ func probeHTTP(ctx context.Context, target string, module Module, registry *prom
 	if httpConfig.Method == "" {
 		httpConfig.Method = "GET"
 	}
+	span.SetTag("http.method", httpConfig.Method)
 
 	request, err := http.NewRequest(httpConfig.Method, target, nil)
 	request.Host = targetURL.Host
@@ -157,6 +166,7 @@ func probeHTTP(ctx context.Context, target string, module Module, registry *prom
 
 	if err != nil {
 		log.Errorf("Error creating request for target %s: %s", target, err)
+		span.SetTag("blackbox_exporter.success", false)
 		return
 	}
 
@@ -166,6 +176,12 @@ func probeHTTP(ctx context.Context, target string, module Module, registry *prom
 			continue
 		}
 		request.Header.Set(key, value)
+	}
+
+	carrier := opentracing.HTTPHeadersCarrier(request.Header)
+	err = opentracing.GlobalTracer().Inject(span.Context(), opentracing.HTTPHeaders, carrier)
+	if err != nil {
+		log.Errorf("Unable to inject carrier headers into http request: %s", err)
 	}
 
 	// If a body is configured, add it to the request.
@@ -189,6 +205,8 @@ func probeHTTP(ctx context.Context, target string, module Module, registry *prom
 		} else if 200 <= resp.StatusCode && resp.StatusCode < 300 {
 			success = true
 		}
+
+		span.SetTag("http.status_code", resp.StatusCode)
 
 		if success && (len(httpConfig.FailIfMatchesRegexp) > 0 || len(httpConfig.FailIfNotMatchesRegexp) > 0) {
 			success = matchRegularExpressions(resp.Body, httpConfig)
@@ -239,5 +257,8 @@ func probeHTTP(ctx context.Context, target string, module Module, registry *prom
 	statusCodeGauge.Set(float64(resp.StatusCode))
 	contentLengthGauge.Set(float64(resp.ContentLength))
 	redirectsGauge.Set(float64(redirects))
+
+	span.SetTag("blackbox_exporter.success", success)
+
 	return
 }

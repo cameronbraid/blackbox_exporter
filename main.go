@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -24,13 +25,16 @@ import (
 	"syscall"
 	"time"
 
-	"gopkg.in/alecthomas/kingpin.v2"
-	"gopkg.in/yaml.v2"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	yaml "gopkg.in/yaml.v2"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/version"
+
+	opentracing "github.com/opentracing/opentracing-go"
+	jaegercfg "github.com/uber/jaeger-client-go/config"
 )
 
 var (
@@ -48,6 +52,33 @@ var Probers = map[string]func(context.Context, string, Module, *prometheus.Regis
 	"tcp":  probeTCP,
 	"icmp": probeICMP,
 	"dns":  probeDNS,
+}
+
+// Init creates a new instance of Jaeger tracer.
+func initTracer(defaultServiceName string) (io.Closer, error) {
+
+	cfg, err := jaegercfg.FromEnv()
+	if err != nil {
+		log.Errorln("Could not create Jaeger configuration form env vars")
+		return nil, err
+	}
+	if cfg.ServiceName == "" {
+		cfg.ServiceName = defaultServiceName
+	}
+	cfg.Sampler.Type = "const"
+	cfg.Sampler.Param = 1
+	log.Infof("Jager tracing with ServiceName %s", cfg.ServiceName)
+
+	tracer, closer, err := cfg.NewTracer()
+	if err != nil {
+		log.Errorf("Could not initialize jaeger tracer from configuration: %s", err)
+		return nil, err
+	}
+
+	opentracing.SetGlobalTracer(tracer)
+
+	return closer, nil
+
 }
 
 func (sc *SafeConfig) reloadConfig(confFile string) (err error) {
@@ -154,6 +185,12 @@ func main() {
 	if err := sc.reloadConfig(*configFile); err != nil {
 		log.Fatalf("Error loading config: %s", err)
 	}
+
+	closer, err := initTracer("blackbox_exporter")
+	if err != nil {
+		return
+	}
+	defer closer.Close()
 
 	hup := make(chan os.Signal)
 	reloadCh := make(chan chan error)

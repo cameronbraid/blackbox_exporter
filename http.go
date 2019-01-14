@@ -194,6 +194,8 @@ func probeHTTP(ctx context.Context, target string, module Module, registry *prom
 		log.Errorf("Error for HTTP request to %s: %s", target, err)
 		success = false
 	} else {
+		_, _ = ioutil.ReadAll(resp.Body)
+
 		defer resp.Body.Close()
 		if len(httpConfig.ValidStatusCodes) != 0 {
 			for _, code := range httpConfig.ValidStatusCodes {

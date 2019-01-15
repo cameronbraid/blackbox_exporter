@@ -7,6 +7,7 @@ require (
 	github.com/alecthomas/template v0.0.0-20160405071501-a0175ee3bccc // indirect
 	github.com/alecthomas/units v0.0.0-20151022065526-2efee857e7cf // indirect
 	github.com/beorn7/perks v0.0.0-20160804104726-4c0e84591b9a // indirect
+	github.com/codahale/hdrhistogram v0.0.0-20161010025455-3a0bb77429bd // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-kit/kit v0.0.0-20170917202734-0d313fb5fb3a
 	github.com/go-logfmt/logfmt v0.3.0 // indirect
@@ -17,6 +18,7 @@ require (
 	github.com/mattn/go-isatty v0.0.4 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/miekg/dns v1.0.1
+	github.com/opentracing/opentracing-go v1.0.2
 	github.com/pkg/errors v0.0.0-20170910134614-2b3a18b5f0fb // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_golang v0.9.0
@@ -25,6 +27,10 @@ require (
 	github.com/prometheus/procfs v0.0.0-20170703101242-e645f4e5aaa8 // indirect
 	github.com/sergi/go-diff v1.0.0 // indirect
 	github.com/stretchr/testify v1.2.2 // indirect
+	github.com/uber-go/atomic v1.3.2 // indirect
+	github.com/uber/jaeger-client-go v2.15.1-0.20190113165020-cd507787f07e+incompatible
+	github.com/uber/jaeger-lib v2.0.0+incompatible // indirect
+	go.uber.org/atomic v1.3.2 // indirect
 	golang.org/x/crypto v0.0.0-20171231215028-0fcca4842a8d // indirect
 	golang.org/x/net v0.0.0-20171102191033-01c190206fbd
 	golang.org/x/sync v0.0.0-20181108010431-42b317875d0f // indirect

@@ -20,6 +20,10 @@ github.com/kr/logfmt
 github.com/matttproud/golang_protobuf_extensions/pbutil
 # github.com/miekg/dns v1.0.1
 github.com/miekg/dns
+# github.com/opentracing/opentracing-go v1.0.2
+github.com/opentracing/opentracing-go
+github.com/opentracing/opentracing-go/log
+github.com/opentracing/opentracing-go/ext
 # github.com/pkg/errors v0.0.0-20170910134614-2b3a18b5f0fb
 github.com/pkg/errors
 # github.com/prometheus/client_golang v0.9.0
@@ -39,6 +43,26 @@ github.com/prometheus/common/internal/bitbucket.org/ww/goautoneg
 # github.com/prometheus/procfs v0.0.0-20170703101242-e645f4e5aaa8
 github.com/prometheus/procfs
 github.com/prometheus/procfs/xfs
+# github.com/uber/jaeger-client-go v2.15.1-0.20190113165020-cd507787f07e+incompatible
+github.com/uber/jaeger-client-go/config
+github.com/uber/jaeger-client-go
+github.com/uber/jaeger-client-go/internal/baggage/remote
+github.com/uber/jaeger-client-go/internal/throttler/remote
+github.com/uber/jaeger-client-go/rpcmetrics
+github.com/uber/jaeger-client-go/transport
+github.com/uber/jaeger-client-go/internal/baggage
+github.com/uber/jaeger-client-go/internal/spanlog
+github.com/uber/jaeger-client-go/internal/throttler
+github.com/uber/jaeger-client-go/log
+github.com/uber/jaeger-client-go/thrift
+github.com/uber/jaeger-client-go/thrift-gen/jaeger
+github.com/uber/jaeger-client-go/thrift-gen/sampling
+github.com/uber/jaeger-client-go/thrift-gen/zipkincore
+github.com/uber/jaeger-client-go/utils
+github.com/uber/jaeger-client-go/thrift-gen/baggage
+github.com/uber/jaeger-client-go/thrift-gen/agent
+# github.com/uber/jaeger-lib v2.0.0+incompatible
+github.com/uber/jaeger-lib/metrics
 # golang.org/x/crypto v0.0.0-20171231215028-0fcca4842a8d
 golang.org/x/crypto/ed25519
 golang.org/x/crypto/ed25519/internal/edwards25519
@@ -47,6 +71,7 @@ golang.org/x/net/icmp
 golang.org/x/net/ipv4
 golang.org/x/net/ipv6
 golang.org/x/net/publicsuffix
+golang.org/x/net/context
 golang.org/x/net/internal/iana
 golang.org/x/net/internal/socket
 golang.org/x/net/bpf

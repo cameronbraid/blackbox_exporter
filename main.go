@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -34,11 +35,14 @@ import (
 	"github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/promlog/flag"
 	"github.com/prometheus/common/version"
-	"gopkg.in/alecthomas/kingpin.v2"
-	"gopkg.in/yaml.v2"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	yaml "gopkg.in/yaml.v2"
 
 	"github.com/prometheus/blackbox_exporter/config"
 	"github.com/prometheus/blackbox_exporter/prober"
+
+	opentracing "github.com/opentracing/opentracing-go"
+	jaegercfg "github.com/uber/jaeger-client-go/config"
 )
 
 var (
@@ -59,6 +63,36 @@ var (
 		"dns":  prober.ProbeDNS,
 	}
 )
+
+// Init creates a new instance of Jaeger tracer.
+func initTracer(logger log.Logger, defaultServiceName string) (io.Closer, error) {
+
+	cfg, err := jaegercfg.FromEnv()
+	if err != nil {
+		level.Error(logger).Log("msg", "Could not create Jaeger configuration form env vars", "err", err)
+		return nil, err
+	}
+	if cfg.ServiceName == "" {
+		cfg.ServiceName = defaultServiceName
+	}
+	if cfg.Sampler.Type == "" {
+		cfg.Sampler.Type = "const"
+		cfg.Sampler.Param = 1
+	}
+
+	level.Info(logger).Log("msg", fmt.Sprintf("Jager tracing with ServiceName %s", cfg.ServiceName), "err", err)
+
+	tracer, closer, err := cfg.NewTracer()
+	if err != nil {
+		level.Error(logger).Log("msg", "Could not initialize jaeger tracer from configuration", "err", err)
+		return nil, err
+	}
+
+	opentracing.SetGlobalTracer(tracer)
+
+	return closer, nil
+
+}
 
 func probeHandler(w http.ResponseWriter, r *http.Request, c *config.Config, logger log.Logger, rh *resultHistory) {
 	moduleName := r.URL.Query().Get("module")
@@ -328,6 +362,13 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write(c)
 	})
+
+	closer, err := initTracer(logger, "blackbox_exporter")
+	if err != nil {
+		level.Error(logger).Log("msg", "Error initialising Jaeger Client Opentracing Client", "err", err)
+		os.Exit(1)
+	}
+	defer closer.Close()
 
 	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
 	if err := http.ListenAndServe(*listenAddress, nil); err != nil {

@@ -69,7 +69,7 @@ func ProbeICMP(ctx context.Context, target string, module config.Module, registr
 		level.Warn(logger).Log("msg", "Error resolving address", "err", err)
 		return false
 	}
-	durationGaugeVec.WithLabelValues("resolve").Add(lookupTime)
+	durationGaugeVec.WithLabelValues("resolve").Add(lookupTime.Seconds())
 
 	var srcIP net.IP
 	if len(module.ICMP.SourceIPAddress) > 0 {

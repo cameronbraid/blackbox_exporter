@@ -36,6 +36,8 @@ import (
 	"golang.org/x/net/publicsuffix"
 
 	"github.com/prometheus/blackbox_exporter/config"
+
+	opentracing "github.com/opentracing/opentracing-go"
 )
 
 func matchRegularExpressions(reader io.Reader, httpConfig config.HTTPProbe, logger log.Logger) bool {
@@ -203,12 +205,33 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 		targetHost = targetURL.Host
 	}
 
+	span, ctx := opentracing.StartSpanFromContext(ctx, "http_probe")
+	defer span.Finish()
+
+	span.SetTag("http.url", target)
+
+	chooseProtocolSpan := opentracing.StartSpan(
+		"http_probe_choose_protocol",
+		opentracing.ChildOf(span.Context()),
+	)
+
 	ip, lookupTime, err := chooseProtocol(module.HTTP.IPProtocol, module.HTTP.IPProtocolFallback, targetHost, registry, logger)
+
 	if err != nil {
+		span.SetTag("blackbox_exporter.success", false)
+		chooseProtocolSpan.LogKV("msg", "Error resolving address", "err", err)
+		chooseProtocolSpan.Finish()
 		level.Error(logger).Log("msg", "Error resolving address", "err", err)
 		return false
 	}
-	durationGaugeVec.WithLabelValues("resolve").Add(lookupTime)
+	durationGaugeVec.WithLabelValues("resolve").Add(lookupTime.Seconds())
+
+	chooseProtocolSpan.Finish()
+
+	generateClientSpan := opentracing.StartSpan(
+		"http_probe_generate_client",
+		opentracing.ChildOf(span.Context()),
+	)
 
 	httpClientConfig := module.HTTP.HTTPClientConfig
 	if len(httpClientConfig.TLSConfig.ServerName) == 0 {
@@ -218,12 +241,24 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 	}
 	client, err := pconfig.NewHTTPClientFromConfig(&httpClientConfig)
 	if err != nil {
+		span.SetTag("blackbox_exporter.success", false)
+		generateClientSpan.LogKV("msg", "Error generating HTTP client", "err", err)
+		generateClientSpan.Finish()
 		level.Error(logger).Log("msg", "Error generating HTTP client", "err", err)
 		return false
 	}
+	generateClientSpan.Finish()
+
+	prepareRequestSpan := opentracing.StartSpan(
+		"http_probe_prepare_request",
+		opentracing.ChildOf(span.Context()),
+	)
 
 	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	if err != nil {
+		span.SetTag("blackbox_exporter.success", false)
+		prepareRequestSpan.LogKV("msg", "Error generating cookiejar", "err", err)
+		prepareRequestSpan.Finish()
 		level.Error(logger).Log("msg", "Error generating cookiejar", "err", err)
 		return false
 	}
@@ -247,6 +282,8 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 		httpConfig.Method = "GET"
 	}
 
+	span.SetTag("http.method", httpConfig.Method)
+
 	// Replace the host field in the URL with the IP we resolved.
 	origHost := targetURL.Host
 	if targetPort == "" {
@@ -254,6 +291,7 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 	} else {
 		targetURL.Host = net.JoinHostPort(ip.String(), targetPort)
 	}
+	span.SetTag("http.host", origHost)
 
 	var body io.Reader
 
@@ -266,6 +304,9 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 	request.Host = origHost
 	request = request.WithContext(ctx)
 	if err != nil {
+		span.SetTag("blackbox_exporter.success", false)
+		prepareRequestSpan.LogKV("msg", "Error creating request", "err", err)
+		prepareRequestSpan.Finish()
 		level.Error(logger).Log("msg", "Error creating request", "err", err)
 		return
 	}
@@ -276,6 +317,13 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 			continue
 		}
 		request.Header.Set(key, value)
+	}
+
+	carrier := opentracing.HTTPHeadersCarrier(request.Header)
+	err = opentracing.GlobalTracer().Inject(span.Context(), opentracing.HTTPHeaders, carrier)
+	if err != nil {
+		prepareRequestSpan.LogKV("msg", "Unable to inject carrier headers into http request", "err", err)
+		level.Error(logger).Log("msg", "Unable to inject carrier headers into http request", "err", err)
 	}
 
 	level.Info(logger).Log("msg", "Making HTTP request", "url", request.URL.String(), "host", request.Host)
@@ -289,6 +337,8 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 		GotFirstResponseByte: tt.GotFirstResponseByte,
 	}
 	request = request.WithContext(httptrace.WithClientTrace(request.Context(), trace))
+
+	prepareRequestSpan.Finish()
 
 	resp, err := client.Do(request)
 	// Err won't be nil if redirects were turned off. See https://github.com/golang/go/issues/3795
@@ -337,6 +387,8 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 		// At this point body is fully read and we can write end time.
 		tt.current.end = time.Now()
 
+		span.SetTag("http.status_code", resp.StatusCode)
+
 		var httpVersionNumber float64
 		httpVersionNumber, err = strconv.ParseFloat(strings.TrimPrefix(resp.Proto, "HTTP/"), 64)
 		if err != nil {
@@ -364,6 +416,14 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 		resp = &http.Response{}
 	}
 	for i, trace := range tt.traces {
+
+		traceSpan := opentracing.StartSpan(
+			"http_probe_roundtrip",
+			opentracing.ChildOf(span.Context()),
+			opentracing.StartTime(trace.start),
+		)
+		traceSpan.SetTag("roundtrip", i)
+
 		level.Info(logger).Log(
 			"msg", "Response timings for roundtrip",
 			"roundtrip", i,
@@ -374,34 +434,85 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 			"responseStart", trace.responseStart,
 			"end", trace.end,
 		)
-		// We get the duration for the first request from chooseProtocol.
+
+		// We get the duration for the first request from chooseProtocol (lookupTime).
 		if i != 0 {
 			durationGaugeVec.WithLabelValues("resolve").Add(trace.dnsDone.Sub(trace.start).Seconds())
 		}
-		// Continue here if we never got a connection because a request failed.
-		if trace.gotConn.IsZero() {
-			continue
-		}
-		if trace.tls {
-			// dnsDone must be set if gotConn was set.
-			durationGaugeVec.WithLabelValues("connect").Add(trace.connectDone.Sub(trace.dnsDone).Seconds())
-			durationGaugeVec.WithLabelValues("tls").Add(trace.gotConn.Sub(trace.dnsDone).Seconds())
-		} else {
-			durationGaugeVec.WithLabelValues("connect").Add(trace.gotConn.Sub(trace.dnsDone).Seconds())
-		}
+		opentracing.StartSpan(
+			"http_probe_resolve",
+			opentracing.ChildOf(traceSpan.Context()),
+			opentracing.StartTime(trace.start),
+		).FinishWithOptions(opentracing.FinishOptions{
+			FinishTime: trace.dnsDone,
+		})
 
-		// Continue here if we never got a response from the server.
-		if trace.responseStart.IsZero() {
-			continue
-		}
-		durationGaugeVec.WithLabelValues("processing").Add(trace.responseStart.Sub(trace.gotConn).Seconds())
+		// Skip here if we never got a connection because a request failed.
+		if !trace.gotConn.IsZero() {
 
-		// Continue here if we never read the full response from the server.
-		// Usually this means that request either failed or was redirected.
-		if trace.end.IsZero() {
-			continue
+			if trace.tls {
+				// dnsDone must be set if gotConn was set.
+				durationGaugeVec.WithLabelValues("connect").Add(trace.connectDone.Sub(trace.dnsDone).Seconds())
+				durationGaugeVec.WithLabelValues("tls").Add(trace.gotConn.Sub(trace.dnsDone).Seconds())
+
+				opentracing.StartSpan(
+					"http_probe_roundtrip_connect",
+					opentracing.ChildOf(traceSpan.Context()),
+					opentracing.StartTime(trace.dnsDone),
+				).FinishWithOptions(opentracing.FinishOptions{
+					FinishTime: trace.connectDone,
+				})
+
+				opentracing.StartSpan(
+					"http_probe_roundtrip_tls",
+					opentracing.ChildOf(traceSpan.Context()),
+					opentracing.StartTime(trace.dnsDone),
+				).FinishWithOptions(opentracing.FinishOptions{
+					FinishTime: trace.gotConn,
+				})
+
+			} else {
+				durationGaugeVec.WithLabelValues("connect").Add(trace.gotConn.Sub(trace.dnsDone).Seconds())
+				opentracing.StartSpan(
+					"http_probe_roundtrip_connect",
+					opentracing.ChildOf(traceSpan.Context()),
+					opentracing.StartTime(trace.dnsDone),
+				).FinishWithOptions(opentracing.FinishOptions{
+					FinishTime: trace.gotConn,
+				})
+			}
+
+			// Skip here if we never got a response from the server.
+			if !trace.responseStart.IsZero() {
+
+				durationGaugeVec.WithLabelValues("processing").Add(trace.responseStart.Sub(trace.gotConn).Seconds())
+
+				opentracing.StartSpan(
+					"http_probe_roundtrip_processing",
+					opentracing.ChildOf(traceSpan.Context()),
+					opentracing.StartTime(trace.gotConn),
+				).FinishWithOptions(opentracing.FinishOptions{
+					FinishTime: trace.responseStart,
+				})
+
+				// Skip here if we never read the full response from the server.
+				// Usually this means that request either failed or was redirected.
+				if !trace.end.IsZero() {
+					durationGaugeVec.WithLabelValues("transfer").Add(trace.end.Sub(trace.responseStart).Seconds())
+
+					opentracing.StartSpan(
+						"http_probe_roundtrip_transfer",
+						opentracing.ChildOf(traceSpan.Context()),
+						opentracing.StartTime(trace.responseStart),
+					).FinishWithOptions(opentracing.FinishOptions{
+						FinishTime: trace.end,
+					})
+				}
+			}
 		}
-		durationGaugeVec.WithLabelValues("transfer").Add(trace.end.Sub(trace.responseStart).Seconds())
+		traceSpan.FinishWithOptions(opentracing.FinishOptions{
+			FinishTime: trace.end,
+		})
 	}
 
 	if resp.TLS != nil {
@@ -420,5 +531,8 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 	statusCodeGauge.Set(float64(resp.StatusCode))
 	contentLengthGauge.Set(float64(resp.ContentLength))
 	redirectsGauge.Set(float64(redirects))
+
+	span.SetTag("blackbox_exporter.success", success)
+
 	return
 }

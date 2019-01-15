@@ -11,7 +11,7 @@ import (
 )
 
 // Returns the IP for the IPProtocol and lookup time.
-func chooseProtocol(IPProtocol string, fallbackIPProtocol bool, target string, registry *prometheus.Registry, logger log.Logger) (ip *net.IPAddr, lookupTime float64, err error) {
+func chooseProtocol(IPProtocol string, fallbackIPProtocol bool, target string, registry *prometheus.Registry, logger log.Logger) (ip *net.IPAddr, lookupTime time.Duration, err error) {
 	var fallbackProtocol string
 	probeDNSLookupTimeSeconds := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "probe_dns_lookup_time_seconds",
@@ -43,8 +43,8 @@ func chooseProtocol(IPProtocol string, fallbackIPProtocol bool, target string, r
 	resolveStart := time.Now()
 
 	defer func() {
-		lookupTime = time.Since(resolveStart).Seconds()
-		probeDNSLookupTimeSeconds.Add(lookupTime)
+		lookupTime = time.Since(resolveStart)
+		probeDNSLookupTimeSeconds.Add(lookupTime.Seconds())
 	}()
 
 	ip, err = net.ResolveIPAddr(IPProtocol, target)
